@@ -25,6 +25,8 @@ app.add_middleware(
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_phase4_columns()
+    ensure_auth_columns()
+    ensure_performance_indexes()
 
 
 def ensure_phase4_columns() -> None:
@@ -52,6 +54,66 @@ def ensure_phase4_columns() -> None:
             connection.execute(
                 text(f"ALTER TABLE encounters ADD COLUMN {column_name} {column_sql}")
             )
+
+
+def ensure_auth_columns() -> None:
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    required_columns = {
+        "session_version": "INTEGER NOT NULL DEFAULT 0",
+    }
+
+    with engine.begin() as connection:
+        for column_name, column_sql in required_columns.items():
+            if column_name in existing_columns:
+                continue
+            connection.execute(
+                text(f"ALTER TABLE users ADD COLUMN {column_name} {column_sql}")
+            )
+
+
+def ensure_performance_indexes() -> None:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    required_indexes = {
+        "encounters": {
+            "ix_encounters_patient_profile_occurred_at": (
+                "CREATE INDEX ix_encounters_patient_profile_occurred_at "
+                "ON encounters (patient_profile_id, occurred_at)"
+            ),
+            "ix_encounters_doctor_profile_occurred_at": (
+                "CREATE INDEX ix_encounters_doctor_profile_occurred_at "
+                "ON encounters (doctor_profile_id, occurred_at)"
+            ),
+        },
+        "symptoms": {
+            "ix_symptoms_encounter_id": (
+                "CREATE INDEX ix_symptoms_encounter_id ON symptoms (encounter_id)"
+            ),
+        },
+        "suggested_treatments": {
+            "ix_suggested_treatments_encounter_id": (
+                "CREATE INDEX ix_suggested_treatments_encounter_id "
+                "ON suggested_treatments (encounter_id)"
+            ),
+        },
+    }
+
+    with engine.begin() as connection:
+        for table_name, indexes in required_indexes.items():
+            if table_name not in existing_tables:
+                continue
+
+            existing_index_names = {
+                index["name"] for index in inspector.get_indexes(table_name)
+            }
+            for index_name, create_sql in indexes.items():
+                if index_name in existing_index_names:
+                    continue
+                connection.execute(text(create_sql))
 
 
 @app.exception_handler(HTTPException)

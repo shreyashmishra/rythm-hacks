@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import JSON, Date, DateTime, Enum, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -27,6 +27,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(Enum(Role), index=True)
+    session_version: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -84,6 +85,10 @@ class DoctorProfile(Base):
 
 class Encounter(Base):
     __tablename__ = "encounters"
+    __table_args__ = (
+        Index("ix_encounters_patient_profile_occurred_at", "patient_profile_id", "occurred_at"),
+        Index("ix_encounters_doctor_profile_occurred_at", "doctor_profile_id", "occurred_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=generate_id)
     patient_profile_id: Mapped[str] = mapped_column(
@@ -123,7 +128,9 @@ class Symptom(Base):
     __tablename__ = "symptoms"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=generate_id)
-    encounter_id: Mapped[str] = mapped_column(ForeignKey("encounters.id", ondelete="CASCADE"))
+    encounter_id: Mapped[str] = mapped_column(
+        ForeignKey("encounters.id", ondelete="CASCADE"), index=True
+    )
     name: Mapped[str] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -134,7 +141,9 @@ class SuggestedTreatment(Base):
     __tablename__ = "suggested_treatments"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=generate_id)
-    encounter_id: Mapped[str] = mapped_column(ForeignKey("encounters.id", ondelete="CASCADE"))
+    encounter_id: Mapped[str] = mapped_column(
+        ForeignKey("encounters.id", ondelete="CASCADE"), index=True
+    )
     name: Mapped[str] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

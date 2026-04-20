@@ -6,9 +6,13 @@ class Settings(BaseSettings):
     port: int = 4000
     database_url: str
     jwt_secret: str
+    jwt_issuer: str = "medicalai-api"
+    jwt_audience: str = "medicalai-web"
     cookie_name: str = "rythm_session"
     cors_origin: str = "http://localhost:5173"
     cookie_secure: bool = False
+    redis_url: str | None = None
+    encounter_cache_ttl_seconds: int = 300
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
 

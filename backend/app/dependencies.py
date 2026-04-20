@@ -13,6 +13,8 @@ from .models import Role, User
 class AuthContext:
     user_id: str
     role: Role
+    permissions: set[str]
+    session_version: int
 
 
 def get_auth_context(request: Request) -> AuthContext:
@@ -24,12 +26,26 @@ def get_auth_context(request: Request) -> AuthContext:
         )
 
     payload = decode_token(token)
-    return AuthContext(user_id=payload["sub"], role=Role(payload["role"]))
+    return AuthContext(
+        user_id=payload["sub"],
+        role=Role(payload["role"]),
+        permissions=set(payload["permissions"]),
+        session_version=payload["session_version"],
+    )
 
 
 def require_role(role: Role):
     def dependency(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:
         if auth.role != role:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        return auth
+
+    return dependency
+
+
+def require_permission(permission: str):
+    def dependency(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:
+        if permission not in auth.permissions:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         return auth
 
@@ -42,6 +58,11 @@ def get_current_user(
 ) -> User:
     user = db.get(User, auth.user_id)
     if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session is no longer valid",
+        )
+    if user.role != auth.role or user.session_version != auth.session_version:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session is no longer valid",

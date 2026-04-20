@@ -55,7 +55,7 @@ def signup(
     db.commit()
     db.refresh(user)
 
-    set_session_cookie(response, create_token(user.id, user.role))
+    set_session_cookie(response, create_token(user.id, user.role, user.session_version))
     return {"user": serialize_user(user)}
 
 
@@ -75,12 +75,18 @@ def login(
             detail="Selected role does not match this account",
         )
 
-    set_session_cookie(response, create_token(user.id, user.role))
+    set_session_cookie(response, create_token(user.id, user.role, user.session_version))
     return {"user": serialize_user(user)}
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict[str, bool]:
+def logout(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    current_user.session_version += 1
+    db.commit()
     clear_session_cookie(response)
     return {"success": True}
 

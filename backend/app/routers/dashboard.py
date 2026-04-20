@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..dependencies import AuthContext, require_role
+from ..dependencies import AuthContext, require_permission, require_role
 from ..models import DoctorProfile, Encounter, PatientProfile, Role
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 @router.get("/patient/dashboard")
 def patient_dashboard(
     auth: AuthContext = Depends(require_role(Role.patient)),
+    _permission: AuthContext = Depends(require_permission("patient:read:self")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     patient_profile = db.scalar(select(PatientProfile).where(PatientProfile.user_id == auth.user_id))
@@ -33,6 +34,7 @@ def patient_dashboard(
 @router.get("/doctor/dashboard")
 def doctor_dashboard(
     auth: AuthContext = Depends(require_role(Role.doctor)),
+    _permission: AuthContext = Depends(require_permission("doctor:read:patients")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     doctor_profile = db.scalar(select(DoctorProfile).where(DoctorProfile.user_id == auth.user_id))
