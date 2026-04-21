@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,27 +10,26 @@ from ..dependencies import AuthContext, require_permission, require_role
 from ..models import (
     DoctorProfile,
     Encounter,
+    EncounterAiStatus,
     PatientProfile,
     Role,
     SuggestedTreatment,
     Symptom,
+    User,
 )
-from ..schemas import (
-    AiReviewUpdateRequest,
-    EncounterCreateRequest,
-    EncounterTreatmentUpdateRequest,
+from ..schemas import AiReviewUpdateRequest, EncounterCreateRequest, EncounterTreatmentUpdateRequest
+from ..serializers import calculate_age, serialize_encounter, serialize_patient_profile
+from ..services.ai_jobs import (
+    get_latest_ai_job,
+    get_latest_ai_jobs_for_encounters,
+    queue_ai_job,
+    serialize_ai_job,
 )
-from ..services.ai import GeminiAiService
+from ..services.audit import fetch_recent_audit_events, log_audit_event
 from ..services.ehr_cache import (
     cache_patient_encounters,
     get_cached_patient_encounters,
     invalidate_patient_encounters,
-)
-from ..serializers import (
-    calculate_age,
-    normalize_string_list,
-    serialize_encounter,
-    serialize_patient_profile,
 )
 
 router = APIRouter(prefix="/api", tags=["patients"])
@@ -52,10 +51,34 @@ ENCOUNTER_READ_OPTIONS = (
         Encounter.ai_follow_up_questions,
         Encounter.ai_suggested_treatments,
         Encounter.ai_review_notes,
+        Encounter.ai_generated_at,
+        Encounter.ai_generated_summary,
+        Encounter.ai_generated_follow_up_window,
+        Encounter.ai_generated_clinical_considerations,
+        Encounter.ai_generated_red_flags,
+        Encounter.ai_generated_follow_up_questions,
+        Encounter.ai_generated_follow_up_actions,
+        Encounter.ai_generated_suggested_treatments,
+        Encounter.ai_generated_urgency_score,
+        Encounter.ai_reviewed_at,
+        Encounter.ai_reviewed_by_user_id,
+        Encounter.ai_approved_summary,
+        Encounter.ai_approved_follow_up_window,
+        Encounter.ai_approved_clinical_considerations,
+        Encounter.ai_approved_red_flags,
+        Encounter.ai_approved_follow_up_questions,
+        Encounter.ai_approved_follow_up_actions,
+        Encounter.ai_approved_suggested_treatments,
+        Encounter.ai_approved_urgency_score,
     ),
     joinedload(Encounter.doctor_profile).load_only(
         DoctorProfile.id,
         DoctorProfile.full_name,
+    ),
+    joinedload(Encounter.reviewed_by_user).load_only(
+        User.id,
+        User.name,
+        User.role,
     ),
     selectinload(Encounter.symptoms).load_only(
         Symptom.id,
@@ -68,7 +91,7 @@ ENCOUNTER_READ_OPTIONS = (
 )
 
 
-def normalize_submitted_list(values: list[str]) -> list[str]:
+def normalize_submitted_list(values: Iterable[str]) -> list[str]:
     normalized: list[str] = []
     for value in values:
         trimmed = value.strip()
@@ -100,39 +123,6 @@ def get_patient_profile_by_id(db: Session, patient_profile_id: str) -> PatientPr
     return patient_profile
 
 
-def serialize_encounter_row(
-    encounter_row,
-    symptoms: list[str],
-    suggested_treatments: list[str],
-) -> dict[str, object]:
-    return {
-        "id": encounter_row.id,
-        "title": encounter_row.title,
-        "summary": encounter_row.summary,
-        "occurredAt": encounter_row.occurred_at.isoformat(),
-        "doctorName": encounter_row.doctor_name,
-        "symptoms": symptoms,
-        "suggestedTreatments": suggested_treatments,
-        "ai": {
-            "status": encounter_row.ai_status or "not_requested",
-            "disclaimer": encounter_row.ai_disclaimer,
-            "preliminarySummary": encounter_row.ai_preliminary_summary,
-            "recommendedFollowUpWindow": encounter_row.ai_follow_up_window,
-            "clinicalConsiderations": normalize_string_list(
-                encounter_row.ai_clinical_considerations
-            ),
-            "redFlags": normalize_string_list(encounter_row.ai_red_flags),
-            "followUpQuestions": normalize_string_list(
-                encounter_row.ai_follow_up_questions
-            ),
-            "suggestedTreatments": normalize_string_list(
-                encounter_row.ai_suggested_treatments
-            ),
-            "reviewNotes": encounter_row.ai_review_notes,
-        },
-    }
-
-
 def get_serialized_patient_encounters(
     db: Session, patient_profile_id: str
 ) -> list[dict[str, object]]:
@@ -140,54 +130,19 @@ def get_serialized_patient_encounters(
     if cached_encounters is not None:
         return cached_encounters
 
-    encounter_rows = db.execute(
-        select(
-            Encounter.id,
-            Encounter.title,
-            Encounter.summary,
-            Encounter.occurred_at,
-            DoctorProfile.full_name.label("doctor_name"),
-            Encounter.ai_status,
-            Encounter.ai_disclaimer,
-            Encounter.ai_preliminary_summary,
-            Encounter.ai_follow_up_window,
-            Encounter.ai_clinical_considerations,
-            Encounter.ai_red_flags,
-            Encounter.ai_follow_up_questions,
-            Encounter.ai_suggested_treatments,
-            Encounter.ai_review_notes,
-        )
-        .join(DoctorProfile, DoctorProfile.id == Encounter.doctor_profile_id)
+    encounters = db.scalars(
+        select(Encounter)
         .where(Encounter.patient_profile_id == patient_profile_id)
+        .options(*ENCOUNTER_READ_OPTIONS)
         .order_by(Encounter.occurred_at.desc())
     ).all()
 
-    if not encounter_rows:
-        cache_patient_encounters(patient_profile_id, [])
-        return []
-
-    encounter_ids = [encounter.id for encounter in encounter_rows]
-    symptoms_by_encounter: dict[str, list[str]] = defaultdict(list)
-    for symptom_row in db.execute(
-        select(Symptom.encounter_id, Symptom.name)
-        .where(Symptom.encounter_id.in_(encounter_ids))
-    ):
-        symptoms_by_encounter[symptom_row.encounter_id].append(symptom_row.name)
-
-    treatments_by_encounter: dict[str, list[str]] = defaultdict(list)
-    for treatment_row in db.execute(
-        select(SuggestedTreatment.encounter_id, SuggestedTreatment.name)
-        .where(SuggestedTreatment.encounter_id.in_(encounter_ids))
-    ):
-        treatments_by_encounter[treatment_row.encounter_id].append(treatment_row.name)
-
+    latest_jobs_by_encounter = get_latest_ai_jobs_for_encounters(
+        db, [encounter.id for encounter in encounters]
+    )
     serialized_encounters = [
-        serialize_encounter_row(
-            encounter,
-            symptoms_by_encounter.get(encounter.id, []),
-            treatments_by_encounter.get(encounter.id, []),
-        )
-        for encounter in encounter_rows
+        serialize_encounter(encounter, latest_job=latest_jobs_by_encounter.get(encounter.id))
+        for encounter in encounters
     ]
     cache_patient_encounters(patient_profile_id, serialized_encounters)
     return serialized_encounters
@@ -208,6 +163,16 @@ def patient_profile_me(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     patient_profile = get_patient_profile_by_user_id(db, auth.user_id)
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="patient.profile_viewed_self",
+        resource_type="patient_profile",
+        resource_id=patient_profile.id,
+        patient_profile_id=patient_profile.id,
+        details={"scope": "self"},
+    )
+    db.commit()
     return {"patient": serialize_patient_profile(patient_profile)}
 
 
@@ -218,12 +183,44 @@ def patient_encounters_me(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     patient_profile = get_patient_profile_by_user_id(db, auth.user_id)
-    return {"encounters": get_serialized_patient_encounters(db, patient_profile.id)}
+    encounters = get_serialized_patient_encounters(db, patient_profile.id)
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="patient.encounters_viewed_self",
+        resource_type="patient_profile",
+        resource_id=patient_profile.id,
+        patient_profile_id=patient_profile.id,
+        details={"encounterCount": len(encounters)},
+    )
+    db.commit()
+    return {"encounters": encounters}
+
+
+@router.get("/patient/activity/me")
+def patient_activity_me(
+    auth: AuthContext = Depends(require_role(Role.patient)),
+    _permission: AuthContext = Depends(require_permission("patient:read:audit:self")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    patient_profile = get_patient_profile_by_user_id(db, auth.user_id)
+    activity = fetch_recent_audit_events(db, patient_profile_id=patient_profile.id)
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="patient.audit_viewed_self",
+        resource_type="patient_profile",
+        resource_id=patient_profile.id,
+        patient_profile_id=patient_profile.id,
+        details={"eventCount": len(activity)},
+    )
+    db.commit()
+    return {"activity": activity}
 
 
 @router.get("/doctor/patients")
 def doctor_patients(
-    _auth: AuthContext = Depends(require_role(Role.doctor)),
+    auth: AuthContext = Depends(require_role(Role.doctor)),
     _permission: AuthContext = Depends(require_permission("doctor:read:patients")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
@@ -251,6 +248,16 @@ def doctor_patients(
         .order_by(PatientProfile.full_name.asc())
     ).all()
 
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.patient_directory_viewed",
+        resource_type="patient_directory",
+        resource_id=None,
+        details={"patientCount": len(patients)},
+    )
+    db.commit()
+
     return {
         "patients": [
             {
@@ -272,23 +279,66 @@ def doctor_patients(
 @router.get("/doctor/patients/{patient_profile_id}")
 def doctor_patient_profile(
     patient_profile_id: str,
-    _auth: AuthContext = Depends(require_role(Role.doctor)),
+    auth: AuthContext = Depends(require_role(Role.doctor)),
     _permission: AuthContext = Depends(require_permission("doctor:read:patients")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     patient_profile = get_patient_profile_by_id(db, patient_profile_id)
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.patient_profile_viewed",
+        resource_type="patient_profile",
+        resource_id=patient_profile.id,
+        patient_profile_id=patient_profile.id,
+        details={"scope": "doctor"},
+    )
+    db.commit()
     return {"patient": serialize_patient_profile(patient_profile)}
 
 
 @router.get("/doctor/patients/{patient_profile_id}/encounters")
 def doctor_patient_encounters(
     patient_profile_id: str,
-    _auth: AuthContext = Depends(require_role(Role.doctor)),
+    auth: AuthContext = Depends(require_role(Role.doctor)),
     _permission: AuthContext = Depends(require_permission("doctor:read:patients")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     patient_profile = get_patient_profile_by_id(db, patient_profile_id)
-    return {"encounters": get_serialized_patient_encounters(db, patient_profile.id)}
+    encounters = get_serialized_patient_encounters(db, patient_profile.id)
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.patient_encounters_viewed",
+        resource_type="patient_profile",
+        resource_id=patient_profile.id,
+        patient_profile_id=patient_profile.id,
+        details={"encounterCount": len(encounters)},
+    )
+    db.commit()
+    return {"encounters": encounters}
+
+
+@router.get("/doctor/patients/{patient_profile_id}/activity")
+def doctor_patient_activity(
+    patient_profile_id: str,
+    auth: AuthContext = Depends(require_role(Role.doctor)),
+    _permission: AuthContext = Depends(require_permission("doctor:read:audit")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    patient_profile = get_patient_profile_by_id(db, patient_profile_id)
+    activity = fetch_recent_audit_events(db, patient_profile_id=patient_profile.id)
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.patient_audit_viewed",
+        resource_type="patient_profile",
+        resource_id=patient_profile.id,
+        patient_profile_id=patient_profile.id,
+        details={"eventCount": len(activity)},
+    )
+    db.commit()
+    return {"activity": activity}
 
 
 @router.post("/doctor/patients/{patient_profile_id}/encounters", status_code=status.HTTP_201_CREATED)
@@ -325,13 +375,25 @@ def create_doctor_encounter(
     )
 
     db.add(encounter)
+    db.flush()
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.encounter_created",
+        resource_type="encounter",
+        resource_id=encounter.id,
+        patient_profile_id=patient_profile.id,
+        encounter_id=encounter.id,
+        details={"symptomCount": len(symptoms)},
+    )
     db.commit()
     invalidate_patient_encounters(patient_profile.id)
     encounter = get_encounter_with_relationships(db, encounter.id)
     if not encounter:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Encounter save failed")
 
-    return {"encounter": serialize_encounter(encounter)}
+    latest_jobs = get_latest_ai_jobs_for_encounters(db, [encounter.id])
+    return {"encounter": serialize_encounter(encounter, latest_job=latest_jobs.get(encounter.id))}
 
 
 @router.patch("/doctor/encounters/{encounter_id}/treatments")
@@ -343,27 +405,37 @@ def update_encounter_treatments(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     doctor_profile = get_doctor_profile(db, auth.user_id)
-    encounter = db.scalar(
-        select(Encounter).where(Encounter.id == encounter_id)
-    )
+    encounter = db.scalar(select(Encounter).where(Encounter.id == encounter_id))
 
     if not encounter or encounter.doctor_profile_id != doctor_profile.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Encounter not found")
 
     encounter.suggested_treatments.clear()
-    for treatment_name in normalize_submitted_list(payload.suggested_treatments):
+    normalized_treatments = normalize_submitted_list(payload.suggested_treatments)
+    for treatment_name in normalized_treatments:
         encounter.suggested_treatments.append(SuggestedTreatment(name=treatment_name))
 
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.encounter_treatments_updated",
+        resource_type="encounter",
+        resource_id=encounter.id,
+        patient_profile_id=encounter.patient_profile_id,
+        encounter_id=encounter.id,
+        details={"treatmentCount": len(normalized_treatments)},
+    )
     db.commit()
     invalidate_patient_encounters(encounter.patient_profile_id)
     encounter = get_encounter_with_relationships(db, encounter_id)
     if not encounter:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Encounter update failed")
 
-    return {"encounter": serialize_encounter(encounter)}
+    latest_jobs = get_latest_ai_jobs_for_encounters(db, [encounter.id])
+    return {"encounter": serialize_encounter(encounter, latest_job=latest_jobs.get(encounter.id))}
 
 
-@router.post("/doctor/encounters/{encounter_id}/ai-generate")
+@router.post("/doctor/encounters/{encounter_id}/ai-generate", status_code=status.HTTP_202_ACCEPTED)
 def generate_ai_for_encounter(
     encounter_id: str,
     auth: AuthContext = Depends(require_role(Role.doctor)),
@@ -371,46 +443,36 @@ def generate_ai_for_encounter(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     doctor_profile = get_doctor_profile(db, auth.user_id)
-    encounter = get_encounter_with_relationships(db, encounter_id)
+    encounter = db.scalar(select(Encounter).where(Encounter.id == encounter_id))
 
     if not encounter or encounter.doctor_profile_id != doctor_profile.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Encounter not found")
 
-    patient_profile = get_patient_profile_by_id(db, encounter.patient_profile_id)
-
-    try:
-        ai_result = GeminiAiService().generate_preliminary_suggestions(patient_profile, encounter)
-    except RuntimeError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(error),
-        ) from error
-    except Exception as error:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Gemini request failed",
-        ) from error
-
-    encounter.ai_status = "generated"
-    encounter.ai_disclaimer = ai_result.disclaimer
-    encounter.ai_preliminary_summary = ai_result.preliminary_summary
-    encounter.ai_follow_up_window = ai_result.recommended_follow_up_window
-    encounter.ai_clinical_considerations = normalize_submitted_list(
-        ai_result.clinical_considerations
+    job, created = queue_ai_job(
+        db,
+        encounter=encounter,
+        requested_by_user_id=auth.user_id,
     )
-    encounter.ai_red_flags = normalize_submitted_list(ai_result.red_flags)
-    encounter.ai_follow_up_questions = normalize_submitted_list(ai_result.follow_up_questions)
-    encounter.ai_suggested_treatments = normalize_submitted_list(
-        ai_result.suggested_treatments
-    )
-    db.commit()
-    invalidate_patient_encounters(encounter.patient_profile_id)
+    return {
+        "job": serialize_ai_job(job),
+        "reusedExistingJob": not created,
+    }
 
-    refreshed_encounter = get_encounter_with_relationships(db, encounter_id)
-    if not refreshed_encounter:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="AI save failed")
 
-    return {"encounter": serialize_encounter(refreshed_encounter)}
+@router.get("/doctor/encounters/{encounter_id}/ai-job")
+def latest_ai_job_for_encounter(
+    encounter_id: str,
+    auth: AuthContext = Depends(require_role(Role.doctor)),
+    _permission: AuthContext = Depends(require_permission("doctor:review:ai")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    doctor_profile = get_doctor_profile(db, auth.user_id)
+    encounter = db.scalar(select(Encounter).where(Encounter.id == encounter_id))
+
+    if not encounter or encounter.doctor_profile_id != doctor_profile.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Encounter not found")
+
+    return {"job": serialize_ai_job(get_latest_ai_job(db, encounter_id))}
 
 
 @router.patch("/doctor/encounters/{encounter_id}/ai-review")
@@ -427,20 +489,85 @@ def review_ai_for_encounter(
     if not encounter or encounter.doctor_profile_id != doctor_profile.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Encounter not found")
 
-    encounter.ai_status = "reviewed"
-    encounter.ai_preliminary_summary = payload.preliminary_summary
-    encounter.ai_follow_up_window = payload.recommended_follow_up_window
-    encounter.ai_clinical_considerations = normalize_submitted_list(
+    if not (encounter.ai_generated_summary or encounter.ai_preliminary_summary):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Generate AI output before reviewing it",
+        )
+
+    encounter.ai_status = EncounterAiStatus.reviewed
+    encounter.ai_review_notes = payload.review_notes or None
+    encounter.ai_reviewed_at = datetime.utcnow()
+    encounter.ai_reviewed_by_user_id = auth.user_id
+    encounter.ai_approved_summary = payload.preliminary_summary
+    encounter.ai_approved_follow_up_window = payload.recommended_follow_up_window
+    encounter.ai_approved_clinical_considerations = normalize_submitted_list(
         payload.clinical_considerations
     )
-    encounter.ai_red_flags = normalize_submitted_list(payload.red_flags)
-    encounter.ai_follow_up_questions = normalize_submitted_list(payload.follow_up_questions)
-    encounter.ai_suggested_treatments = normalize_submitted_list(payload.suggested_treatments)
-    encounter.ai_review_notes = payload.review_notes or None
+    encounter.ai_approved_red_flags = normalize_submitted_list(payload.red_flags)
+    encounter.ai_approved_follow_up_questions = normalize_submitted_list(payload.follow_up_questions)
+    encounter.ai_approved_follow_up_actions = normalize_submitted_list(payload.follow_up_actions)
+    encounter.ai_approved_suggested_treatments = normalize_submitted_list(
+        payload.suggested_treatments
+    )
+    encounter.ai_approved_urgency_score = payload.urgency_score
+
+    encounter.ai_preliminary_summary = encounter.ai_approved_summary
+    encounter.ai_follow_up_window = encounter.ai_approved_follow_up_window
+    encounter.ai_clinical_considerations = encounter.ai_approved_clinical_considerations
+    encounter.ai_red_flags = encounter.ai_approved_red_flags
+    encounter.ai_follow_up_questions = encounter.ai_approved_follow_up_questions
+    encounter.ai_suggested_treatments = encounter.ai_approved_suggested_treatments
 
     encounter.suggested_treatments.clear()
-    for treatment_name in encounter.ai_suggested_treatments:
+    for treatment_name in encounter.ai_approved_suggested_treatments:
         encounter.suggested_treatments.append(SuggestedTreatment(name=treatment_name))
+
+    log_audit_event(
+        db,
+        actor_user_id=auth.user_id,
+        action="doctor.encounter_ai_reviewed",
+        resource_type="encounter",
+        resource_id=encounter.id,
+        patient_profile_id=encounter.patient_profile_id,
+        encounter_id=encounter.id,
+        details={
+            "changedFields": [
+                field_name
+                for field_name, generated_value, approved_value in [
+                    ("preliminarySummary", encounter.ai_generated_summary, encounter.ai_approved_summary),
+                    (
+                        "recommendedFollowUpWindow",
+                        encounter.ai_generated_follow_up_window,
+                        encounter.ai_approved_follow_up_window,
+                    ),
+                    (
+                        "clinicalConsiderations",
+                        encounter.ai_generated_clinical_considerations,
+                        encounter.ai_approved_clinical_considerations,
+                    ),
+                    ("redFlags", encounter.ai_generated_red_flags, encounter.ai_approved_red_flags),
+                    (
+                        "followUpQuestions",
+                        encounter.ai_generated_follow_up_questions,
+                        encounter.ai_approved_follow_up_questions,
+                    ),
+                    (
+                        "followUpActions",
+                        encounter.ai_generated_follow_up_actions,
+                        encounter.ai_approved_follow_up_actions,
+                    ),
+                    (
+                        "suggestedTreatments",
+                        encounter.ai_generated_suggested_treatments,
+                        encounter.ai_approved_suggested_treatments,
+                    ),
+                    ("urgencyScore", encounter.ai_generated_urgency_score, encounter.ai_approved_urgency_score),
+                ]
+                if generated_value != approved_value
+            ],
+        },
+    )
 
     db.commit()
     invalidate_patient_encounters(encounter.patient_profile_id)
@@ -448,4 +575,10 @@ def review_ai_for_encounter(
     if not refreshed_encounter:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="AI review save failed")
 
-    return {"encounter": serialize_encounter(refreshed_encounter)}
+    latest_jobs = get_latest_ai_jobs_for_encounters(db, [refreshed_encounter.id])
+    return {
+        "encounter": serialize_encounter(
+            refreshed_encounter,
+            latest_job=latest_jobs.get(refreshed_encounter.id),
+        )
+    }

@@ -37,65 +37,48 @@ class EncounterTreatmentUpdateRequest(BaseInputModel):
     )
 
 
-class AiSuggestionResponse(BaseModel):
-    disclaimer: str = Field(
-        description="A cautious disclaimer that this is not a final diagnosis."
-    )
+class AiStructuredFields(BaseInputModel):
     preliminary_summary: str = Field(
         alias="preliminarySummary",
         min_length=20,
         max_length=600,
-        description="Cautious, non-definitive clinical summary.",
     )
     recommended_follow_up_window: str = Field(
         alias="recommendedFollowUpWindow",
         min_length=3,
         max_length=120,
-        description="A cautious suggested follow-up timeframe such as within 24 hours, within 1 week, or routine follow-up.",
     )
     clinical_considerations: list[str] = Field(
         alias="clinicalConsiderations",
         min_length=1,
         max_length=6,
-        description="Possible medical considerations phrased cautiously.",
-    )
-    red_flags: list[str] = Field(
-        alias="redFlags",
-        default_factory=list,
-        max_length=6,
-        description="Symptoms or situations that warrant urgent clinician attention.",
-    )
-    follow_up_questions: list[str] = Field(
-        alias="followUpQuestions",
-        default_factory=list,
-        max_length=6,
-        description="Questions a clinician may want to clarify.",
-    )
-    suggested_treatments: list[str] = Field(
-        alias="suggestedTreatments",
-        default_factory=list,
-        max_length=6,
-        description="Preliminary, non-definitive care suggestions.",
-    )
-
-    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
-
-
-class AiReviewUpdateRequest(BaseInputModel):
-    preliminary_summary: str = Field(
-        alias="preliminarySummary", min_length=20, max_length=600
-    )
-    recommended_follow_up_window: str = Field(
-        alias="recommendedFollowUpWindow", min_length=3, max_length=120
-    )
-    clinical_considerations: list[str] = Field(
-        alias="clinicalConsiderations", min_length=1, max_length=6
     )
     red_flags: list[str] = Field(alias="redFlags", default_factory=list, max_length=6)
     follow_up_questions: list[str] = Field(
         alias="followUpQuestions", default_factory=list, max_length=6
     )
-    suggested_treatments: list[str] = Field(
-        alias="suggestedTreatments", default_factory=list, max_length=6
+    follow_up_actions: list[str] = Field(
+        alias="followUpActions", default_factory=list, max_length=6
     )
+    suggested_treatments: list[str] = Field(
+        alias="suggestedTreatments",
+        default_factory=list,
+        max_length=6,
+    )
+    urgency_score: int = Field(alias="urgencyScore", ge=1, le=5)
+
+
+class AiSuggestionResponse(AiStructuredFields):
+    disclaimer: str = Field(
+        description="A cautious disclaimer that this is not a final diagnosis."
+    )
+    possible_risks: list[str] = Field(
+        alias="possibleRisks",
+        default_factory=list,
+        max_length=6,
+        description="Possible medical risks phrased cautiously.",
+    )
+
+
+class AiReviewUpdateRequest(AiStructuredFields):
     review_notes: str | None = Field(alias="reviewNotes", default=None, max_length=800)

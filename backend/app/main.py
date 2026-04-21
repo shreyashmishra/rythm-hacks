@@ -36,7 +36,7 @@ def ensure_phase4_columns() -> None:
 
     existing_columns = {column["name"] for column in inspector.get_columns("encounters")}
     required_columns = {
-        "ai_status": "VARCHAR(32) NULL",
+        "ai_status": "VARCHAR(32) NOT NULL DEFAULT 'not_requested'",
         "ai_disclaimer": "TEXT NULL",
         "ai_preliminary_summary": "TEXT NULL",
         "ai_follow_up_window": "VARCHAR(255) NULL",
@@ -45,6 +45,25 @@ def ensure_phase4_columns() -> None:
         "ai_follow_up_questions": "JSON NULL",
         "ai_suggested_treatments": "JSON NULL",
         "ai_review_notes": "TEXT NULL",
+        "ai_generated_at": "DATETIME NULL",
+        "ai_generated_summary": "TEXT NULL",
+        "ai_generated_follow_up_window": "VARCHAR(255) NULL",
+        "ai_generated_clinical_considerations": "JSON NULL",
+        "ai_generated_red_flags": "JSON NULL",
+        "ai_generated_follow_up_questions": "JSON NULL",
+        "ai_generated_follow_up_actions": "JSON NULL",
+        "ai_generated_suggested_treatments": "JSON NULL",
+        "ai_generated_urgency_score": "INTEGER NULL",
+        "ai_reviewed_at": "DATETIME NULL",
+        "ai_reviewed_by_user_id": "VARCHAR(32) NULL",
+        "ai_approved_summary": "TEXT NULL",
+        "ai_approved_follow_up_window": "VARCHAR(255) NULL",
+        "ai_approved_clinical_considerations": "JSON NULL",
+        "ai_approved_red_flags": "JSON NULL",
+        "ai_approved_follow_up_questions": "JSON NULL",
+        "ai_approved_follow_up_actions": "JSON NULL",
+        "ai_approved_suggested_treatments": "JSON NULL",
+        "ai_approved_urgency_score": "INTEGER NULL",
     }
 
     with engine.begin() as connection:
@@ -54,6 +73,12 @@ def ensure_phase4_columns() -> None:
             connection.execute(
                 text(f"ALTER TABLE encounters ADD COLUMN {column_name} {column_sql}")
             )
+        connection.execute(
+            text(
+                "UPDATE encounters SET ai_status = 'not_requested' "
+                "WHERE ai_status IS NULL OR ai_status = ''"
+            )
+        )
 
 
 def ensure_auth_columns() -> None:
@@ -98,6 +123,30 @@ def ensure_performance_indexes() -> None:
             "ix_suggested_treatments_encounter_id": (
                 "CREATE INDEX ix_suggested_treatments_encounter_id "
                 "ON suggested_treatments (encounter_id)"
+            ),
+        },
+        "ai_jobs": {
+            "ix_ai_jobs_encounter_created_at": (
+                "CREATE INDEX ix_ai_jobs_encounter_created_at "
+                "ON ai_jobs (encounter_id, created_at)"
+            ),
+            "ix_ai_jobs_patient_status": (
+                "CREATE INDEX ix_ai_jobs_patient_status "
+                "ON ai_jobs (patient_profile_id, status)"
+            ),
+        },
+        "audit_events": {
+            "ix_audit_events_patient_created_at": (
+                "CREATE INDEX ix_audit_events_patient_created_at "
+                "ON audit_events (patient_profile_id, created_at)"
+            ),
+            "ix_audit_events_encounter_created_at": (
+                "CREATE INDEX ix_audit_events_encounter_created_at "
+                "ON audit_events (encounter_id, created_at)"
+            ),
+            "ix_audit_events_actor_created_at": (
+                "CREATE INDEX ix_audit_events_actor_created_at "
+                "ON audit_events (actor_user_id, created_at)"
             ),
         },
     }

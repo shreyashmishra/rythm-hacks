@@ -1,5 +1,7 @@
 import type { AuthFormValues, AuthPayload } from '../types/auth'
 import type {
+  ActivityPayload,
+  AiJobPayload,
   AiReviewValues,
   DoctorDashboardPayload,
   DoctorPatientListPayload,
@@ -51,11 +53,14 @@ export const api = {
   doctorDashboard: () => request<DoctorDashboardPayload>('/doctor/dashboard'),
   patientProfile: () => request<PatientProfilePayload>('/patient/profile/me'),
   patientEncounterHistory: () => request<EncounterHistoryPayload>('/patient/encounters/me'),
+  patientActivity: () => request<ActivityPayload>('/patient/activity/me'),
   doctorPatients: () => request<DoctorPatientListPayload>('/doctor/patients'),
   doctorPatientProfile: (patientProfileId: string) =>
     request<PatientProfilePayload>(`/doctor/patients/${patientProfileId}`),
   doctorPatientEncounterHistory: (patientProfileId: string) =>
     request<EncounterHistoryPayload>(`/doctor/patients/${patientProfileId}/encounters`),
+  doctorPatientActivity: (patientProfileId: string) =>
+    request<ActivityPayload>(`/doctor/patients/${patientProfileId}/activity`),
   createDoctorEncounter: (patientProfileId: string, values: EncounterFormValues) =>
     request<EncounterPayload>(`/doctor/patients/${patientProfileId}/encounters`, {
       method: 'POST',
@@ -67,9 +72,11 @@ export const api = {
       body: JSON.stringify({ suggestedTreatments }),
     }),
   generateEncounterAi: (encounterId: string) =>
-    request<EncounterPayload>(`/doctor/encounters/${encounterId}/ai-generate`, {
+    request<AiJobPayload>(`/doctor/encounters/${encounterId}/ai-generate`, {
       method: 'POST',
     }),
+  latestEncounterAiJob: (encounterId: string) =>
+    request<Pick<AiJobPayload, 'job'>>(`/doctor/encounters/${encounterId}/ai-job`),
   reviewEncounterAi: (encounterId: string, values: AiReviewValues) =>
     request<EncounterPayload>(`/doctor/encounters/${encounterId}/ai-review`, {
       method: 'PATCH',

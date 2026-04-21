@@ -13,9 +13,11 @@ Do not provide a final diagnosis.
 Use tentative language such as "may", "could", "might", and "consider".
 Always include a clear disclaimer that this is not a final diagnosis and requires clinician review.
 Keep treatments conservative and non-definitive.
+Return structured output that can be validated and stored in typed backend fields.
 Always provide a recommended follow-up window using practical language such as
 "same day clinician review", "within 24 hours", "within 2-3 days", "within 1 week",
 or "routine follow-up if symptoms persist".
+Provide an urgency score from 1 to 5 where 5 means urgent clinician attention is warranted.
 """.strip()
 
 

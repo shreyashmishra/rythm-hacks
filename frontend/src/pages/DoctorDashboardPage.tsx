@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useDeferredValue, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { DashboardShell } from '../components/DashboardShell'
@@ -13,6 +13,7 @@ export function DoctorDashboardPage() {
   const [patients, setPatients] = useState<DoctorPatientDirectoryItem[]>([])
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
+  const deferredSearch = useDeferredValue(search)
 
   useEffect(() => {
     Promise.all([api.doctorDashboard(), api.doctorPatients()])
@@ -27,7 +28,7 @@ export function DoctorDashboardPage() {
   }, [])
 
   const filteredPatients = patients.filter((patient) =>
-    patient.fullName.toLowerCase().includes(search.trim().toLowerCase()),
+    patient.fullName.toLowerCase().includes(deferredSearch.trim().toLowerCase()),
   )
 
   return (
@@ -38,7 +39,7 @@ export function DoctorDashboardPage() {
     >
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
       <div className="space-y-4">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article className="rounded-3xl border border-line bg-slate-50 p-5">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Patients</p>
             <h2 className="mt-3 text-3xl font-semibold text-ink">{summary?.patientCount ?? 0}</h2>
@@ -48,6 +49,22 @@ export function DoctorDashboardPage() {
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Encounters</p>
             <h2 className="mt-3 text-3xl font-semibold text-ink">{summary?.encounterCount ?? 0}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-500">Encounters linked to your doctor profile.</p>
+          </article>
+          <article className="rounded-3xl border border-line bg-slate-50 p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Pending AI review</p>
+            <h2 className="mt-3 text-3xl font-semibold text-ink">
+              {summary?.pendingAiReviewCount ?? 0}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              Drafts still queued, generating, or awaiting doctor approval.
+            </p>
+          </article>
+          <article className="rounded-3xl border border-line bg-slate-50 p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Higher risk</p>
+            <h2 className="mt-3 text-3xl font-semibold text-ink">{summary?.highRiskCount ?? 0}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              Encounters with urgency scores of 4 or 5.
+            </p>
           </article>
         </div>
 
@@ -59,7 +76,7 @@ export function DoctorDashboardPage() {
         ) : (
           <section className="rounded-[28px] border border-line bg-white p-6">
             <div className="border-b border-line pb-5">
-              <p className="text-xs uppercase tracking-[0.2em] text-accent">Doctor-side patient detail entry point</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-accent">Protected clinician workspace</p>
               <h2 className="mt-3 text-2xl font-semibold text-ink">Patient directory</h2>
               <div className="mt-4 max-w-md">
                 <InputField

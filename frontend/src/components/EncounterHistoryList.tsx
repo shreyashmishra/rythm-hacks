@@ -27,15 +27,20 @@ function DetailPills({
 }
 
 function aiStatusLabel(status: EncounterHistoryItem['ai']['status']) {
-  if (status === 'reviewed') {
-    return 'AI reviewed'
+  switch (status) {
+    case 'reviewed':
+      return 'Doctor approved'
+    case 'generated':
+      return 'Review required'
+    case 'queued':
+      return 'Queued'
+    case 'processing':
+      return 'Processing'
+    case 'failed':
+      return 'Failed'
+    default:
+      return 'Not started'
   }
-
-  if (status === 'generated') {
-    return 'AI generated'
-  }
-
-  return 'AI pending'
 }
 
 export function EncounterHistoryList({
@@ -86,6 +91,11 @@ export function EncounterHistoryList({
                 <div className="rounded-2xl bg-teal-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700">
                   {aiStatusLabel(encounter.ai.status)}
                 </div>
+                {encounter.ai.current?.urgencyScore ? (
+                  <div className="rounded-2xl bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
+                    Urgency {encounter.ai.current.urgencyScore}/5
+                  </div>
+                ) : null}
               </div>
             </div>
 

@@ -59,15 +59,15 @@ export function DashboardShell({
             {children}
           </div>
           <aside className="rounded-[28px] border border-white/70 bg-slate-950 p-6 text-slate-100 shadow-panel">
-            <p className="text-xs uppercase tracking-[0.2em] text-teal-200">Phase 2</p>
-            <h2 className="mt-4 text-xl font-semibold">EHR core structure</h2>
+            <p className="text-xs uppercase tracking-[0.2em] text-teal-200">Clinical Workflow</p>
+            <h2 className="mt-4 text-xl font-semibold">Production-minded demo</h2>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              Profiles, encounters, symptoms, and suggested treatments now provide the
-              first simple MedicalAI-style patient record structure.
+              This workspace now models owner-scoped records, async AI drafting, doctor
+              approval, and audit visibility instead of a simple one-shot summary flow.
             </p>
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm leading-6 text-slate-300">
-              This phase stays intentionally narrow: no AI generation, no multilingual
-              features, and no extra workflow complexity yet.
+              Patient access stays limited to self-service views, while doctors get the
+              protected review and editing workflow for encounter records they own.
             </div>
             <Link
               className="mt-6 inline-flex rounded-full border border-white/15 px-4 py-2 text-sm text-slate-100 transition hover:bg-white/10"

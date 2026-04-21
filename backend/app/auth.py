@@ -17,11 +17,13 @@ TOKEN_TYPE = "session"
 ROLE_PERMISSIONS: dict[Role, list[str]] = {
     Role.patient: [
         "patient:read:self",
+        "patient:read:audit:self",
     ],
     Role.doctor: [
         "doctor:read:patients",
         "doctor:write:encounters",
         "doctor:review:ai",
+        "doctor:read:audit",
     ],
 }
 

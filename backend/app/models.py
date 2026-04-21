@@ -19,6 +19,22 @@ class Role(str, enum.Enum):
     patient = "patient"
 
 
+class EncounterAiStatus(str, enum.Enum):
+    not_requested = "not_requested"
+    queued = "queued"
+    processing = "processing"
+    generated = "generated"
+    reviewed = "reviewed"
+    failed = "failed"
+
+
+class AiJobStatus(str, enum.Enum):
+    queued = "queued"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -99,7 +115,11 @@ class Encounter(Base):
     )
     title: Mapped[str] = mapped_column(String(255))
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ai_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ai_status: Mapped[EncounterAiStatus] = mapped_column(
+        Enum(EncounterAiStatus),
+        default=EncounterAiStatus.not_requested,
+        nullable=False,
+    )
     ai_disclaimer: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_preliminary_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_follow_up_window: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -108,6 +128,47 @@ class Encounter(Base):
     ai_follow_up_questions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     ai_suggested_treatments: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     ai_review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ai_generated_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_generated_follow_up_window: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    ai_generated_clinical_considerations: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_generated_red_flags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    ai_generated_follow_up_questions: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_generated_suggested_treatments: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_generated_follow_up_actions: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_generated_urgency_score: Mapped[int | None] = mapped_column(nullable=True)
+    ai_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ai_reviewed_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    ai_approved_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_approved_follow_up_window: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    ai_approved_clinical_considerations: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_approved_red_flags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    ai_approved_follow_up_questions: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_approved_suggested_treatments: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_approved_follow_up_actions: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    ai_approved_urgency_score: Mapped[int | None] = mapped_column(nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -122,6 +183,68 @@ class Encounter(Base):
     suggested_treatments: Mapped[list[SuggestedTreatment]] = relationship(
         back_populates="encounter", cascade="all, delete-orphan"
     )
+    ai_jobs: Mapped[list[AiJob]] = relationship(
+        back_populates="encounter", cascade="all, delete-orphan"
+    )
+    reviewed_by_user: Mapped[User | None] = relationship(
+        foreign_keys=[ai_reviewed_by_user_id]
+    )
+
+
+class AiJob(Base):
+    __tablename__ = "ai_jobs"
+    __table_args__ = (
+        Index("ix_ai_jobs_encounter_created_at", "encounter_id", "created_at"),
+        Index("ix_ai_jobs_patient_status", "patient_profile_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=generate_id)
+    encounter_id: Mapped[str] = mapped_column(
+        ForeignKey("encounters.id", ondelete="CASCADE"), index=True
+    )
+    patient_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("patient_profiles.id", ondelete="CASCADE"), index=True
+    )
+    requested_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[AiJobStatus] = mapped_column(
+        Enum(AiJobStatus), default=AiJobStatus.queued, nullable=False
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    encounter: Mapped[Encounter] = relationship(back_populates="ai_jobs")
+    requested_by_user: Mapped[User] = relationship()
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_patient_created_at", "patient_profile_id", "created_at"),
+        Index("ix_audit_events_encounter_created_at", "encounter_id", "created_at"),
+        Index("ix_audit_events_actor_created_at", "actor_user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=generate_id)
+    actor_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    patient_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("patient_profiles.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    encounter_id: Mapped[str | None] = mapped_column(
+        ForeignKey("encounters.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(128), index=True)
+    resource_type: Mapped[str] = mapped_column(String(64))
+    resource_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    details: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    actor_user: Mapped[User | None] = relationship()
 
 
 class Symptom(Base):
